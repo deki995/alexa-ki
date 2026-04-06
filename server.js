@@ -7,8 +7,8 @@ app.use(express.json());
 // ===============================
 // 🔑 CONFIG
 // ===============================
-const SUPABASE_URL = https://luckyjbcbmatwkbggcjy.supabase.co;
-const SUPABASE_KEY = sb_publishable_ZscAz27BsQOSp6rPcI9NcA_J74CbfY6;
+const SUPABASE_URL = "https://luckyjbcbmatwkbggcjy.supabase.co";
+const SUPABASE_KEY = "sb_publishable_ZscAz27BsQOSp6rPcI9NcA_J74CbfY6";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const USER_ID = "default_user";
 
