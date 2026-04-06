@@ -4,97 +4,171 @@ import fetch from "node-fetch";
 const app = express();
 app.use(express.json());
 
-// 🧠 SIMPLE MEMORY (später DB)
-let userProfile = {
-  name: "",
-  preferences: {
-    shortAnswers: false,
-    style: "freundlich"
-  },
-  notes: []
-};
+// ===============================
+// 🔑 CONFIG
+// ===============================
+const SUPABASE_URL = "DEINE_URL";
+const SUPABASE_KEY = "DEIN_KEY";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const USER_ID = "default_user";
 
-// 🔥 HELPER: OpenAI Call
+// ===============================
+// 💾 MEMORY (SUPABASE)
+// ===============================
+
+async function loadMemory() {
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/user_memory?user_id=eq.${USER_ID}`,
+      {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`
+        }
+      }
+    );
+
+    const data = await res.json();
+
+    return data.map(i => `${i.key}: ${i.value}`).join("\n");
+  } catch (err) {
+    console.error("Load memory error:", err);
+    return "";
+  }
+}
+
+async function savePreference(value) {
+  try {
+    // alte preference löschen (wichtig für widerspruch)
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/user_memory?user_id=eq.${USER_ID}&key=eq.preference`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`
+        }
+      }
+    );
+
+    // neue speichern
+    await fetch(`${SUPABASE_URL}/rest/v1/user_memory`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        user_id: USER_ID,
+        key: "preference",
+        value
+      })
+    });
+
+  } catch (err) {
+    console.error("Save pref error:", err);
+  }
+}
+
+// ===============================
+// 🧠 OPENAI CALL
+// ===============================
+
 async function callAI(model, messages) {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+      Authorization: `Bearer ${OPENAI_API_KEY}`
     },
-    body: JSON.stringify({
-      model: model,
-      messages: messages
-    })
+    body: JSON.stringify({ model, messages })
   });
 
   const data = await res.json();
   return data.choices?.[0]?.message?.content || "Keine Antwort";
 }
 
-// 🧠 ROUTER
-async function decideComplexity(input) {
-  const decision = await callAI("gpt-4o-mini", [
+// ===============================
+// 🧠 SEMANTISCHES LERNEN
+// ===============================
+
+async function extractPreference(input) {
+  const res = await callAI("gpt-4o-mini", [
     {
       role: "system",
-      content:
-        "Antworte nur mit SIMPLE oder COMPLEX. SIMPLE = einfache Frage, COMPLEX = tiefes Wissen nötig."
+      content: `
+Analysiere ob der Nutzer eine Präferenz über Kommunikation äußert.
+
+Wenn ja:
+→ fasse diese in EINEM kurzen Satz zusammen.
+
+Wenn nein:
+→ antworte nur mit "NONE"
+`
     },
     { role: "user", content: input }
   ]);
 
-  return decision.includes("COMPLEX") ? "complex" : "simple";
+  return res;
 }
 
-// 🧠 FEEDBACK SYSTEM
-function processFeedback(input) {
-  if (input.includes("zu lang")) {
-    userProfile.preferences.shortAnswers = true;
-    return "Okay, ich halte mich ab jetzt kürzer.";
-  }
+// ===============================
+// 🧠 ROUTER (INTELLIGENZ LEVEL)
+// ===============================
 
-  if (input.includes("war gut")) {
-    return "Alles klar, ich merke mir das.";
-  }
+async function decideComplexity(input) {
+  const res = await callAI("gpt-4o-mini", [
+    {
+      role: "system",
+      content: `
+Entscheide ob die Frage einfache oder tiefe Analyse benötigt.
 
-  if (input.includes("war schlecht")) {
-    return "Verstanden, ich werde mich verbessern.";
-  }
+Antwort nur mit:
+SIMPLE oder COMPLEX
+`
+    },
+    { role: "user", content: input }
+  ]);
 
-  if (input.includes("merke dir")) {
-    const info = input.replace("merke dir", "").trim();
-    userProfile.notes.push(info);
-    return "Hab ich mir gemerkt.";
-  }
-
-  return null;
+  return res.includes("COMPLEX") ? "complex" : "simple";
 }
 
-// 🧠 PERSÖNLICHKEIT + MEMORY
-function buildSystemPrompt() {
+// ===============================
+// 🧠 SYSTEM PROMPT
+// ===============================
+
+async function buildPrompt(memory) {
   return `
 Du bist ein persönlicher KI-Freund.
 
-Du sprichst natürlich, wie ein Mensch.
-Du bist locker, intelligent und ehrlich.
+CORE (unveränderbar):
+- Du bist freundlich, respektvoll und empathisch
+- Du bleibst menschlich und ruhig
+- Du wirst niemals unhöflich
 
-WICHTIG:
-- Antworte ${userProfile.preferences.shortAnswers ? "kurz" : "normal"}
-- Passe dich dem Nutzer an
-- Nutze gespeicherte Infos wenn sinnvoll
+VERHALTEN:
+- Antworte standardmäßig in maximal 2 Sätzen
+- Nur wenn der Nutzer mehr Details verlangt → ausführlicher
+- Passe dich intelligent an
 
-User Infos:
-Name: ${userProfile.name}
-Notizen: ${userProfile.notes.join(", ")}
+LERNEN:
+- Interpretiere Nutzerverhalten
+- Aktualisiere Präferenzen bei Widerspruch
+
+Gespeicherte Präferenzen:
+${memory}
 `;
 }
 
+// ===============================
 // 🚀 MAIN
+// ===============================
+
 app.post("/", async (req, res) => {
   try {
     const requestType = req.body.request.type;
 
-    // 🔥 START
     if (requestType === "LaunchRequest") {
       return res.json({
         version: "1.0",
@@ -108,9 +182,8 @@ app.post("/", async (req, res) => {
       });
     }
 
-    // 🔥 INPUT HOLEN
+    // USER INPUT
     let userInput = "";
-
     const intent = req.body.request.intent;
 
     if (intent?.slots) {
@@ -126,15 +199,21 @@ app.post("/", async (req, res) => {
 
     console.log("USER:", userInput);
 
-    // 🧠 FEEDBACK CHECK
-    const feedbackResponse = processFeedback(userInput);
-    if (feedbackResponse) {
+    // 🧠 MEMORY LADEN
+    const memory = await loadMemory();
+
+    // 🧠 LERNEN
+    const pref = await extractPreference(userInput);
+
+    if (pref !== "NONE") {
+      await savePreference(pref);
+
       return res.json({
         version: "1.0",
         response: {
           outputSpeech: {
             type: "PlainText",
-            text: feedbackResponse
+            text: "Okay, ich passe mich daran an."
           },
           shouldEndSession: false
         }
@@ -147,9 +226,12 @@ app.post("/", async (req, res) => {
 
     console.log("MODEL:", model);
 
-    // 🧠 AI CALL
+    // 🧠 PROMPT
+    const systemPrompt = await buildPrompt(memory);
+
+    // 🤖 ANTWORT
     const answer = await callAI(model, [
-      { role: "system", content: buildSystemPrompt() },
+      { role: "system", content: systemPrompt },
       { role: "user", content: userInput }
     ]);
 
@@ -164,14 +246,14 @@ app.post("/", async (req, res) => {
       }
     });
 
-  } catch (error) {
-    console.error(error);
+  } catch (err) {
+    console.error(err);
     return res.json({
       version: "1.0",
       response: {
         outputSpeech: {
           type: "PlainText",
-          text: "Da ist etwas schiefgelaufen."
+          text: "Fehler im System."
         }
       }
     });
