@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ===============================
-// 🔑 CONFIG
+// CONFIG
 // ===============================
 const SUPABASE_URL = "https://luckyjbcbmatwkbggcjy.supabase.co";
 const SUPABASE_KEY = "sb_publishable_ZscAz27BsQOSp6rPcI9NcA_J74CbfY6";
@@ -13,7 +13,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const USER_ID = "default_user";
 
 // ===============================
-// 💾 MEMORY LADEN
+// MEMORY LADEN
 // ===============================
 async function loadMemory() {
   try {
@@ -28,8 +28,7 @@ async function loadMemory() {
     );
 
     const data = await res.json();
-
-    return data.map(i => `${i.key}: ${i.value}`).join("\n");
+    return data.map(i => i.value).join("\n");
 
   } catch (err) {
     console.error("Memory load error:", err);
@@ -38,53 +37,23 @@ async function loadMemory() {
 }
 
 // ===============================
-// 💾 MEMORY SPEICHERN (MIT UPDATE)
+// MEMORY SPEICHERN
 // ===============================
-async function saveMemory(type, content) {
+async function saveMemory(text) {
   try {
-    // 🔥 zuerst prüfen ob schon vorhanden
-    const check = await fetch(
-      `${SUPABASE_URL}/rest/v1/user_memory?user_id=eq.${USER_ID}&key=eq.${type}`,
-      {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`
-        }
-      }
-    );
-
-    const existing = await check.json();
-
-    if (existing.length > 0) {
-      // 🔥 UPDATE statt neu speichern
-      await fetch(
-        `${SUPABASE_URL}/rest/v1/user_memory?user_id=eq.${USER_ID}&key=eq.${type}`,
-        {
-          method: "PATCH",
-          headers: {
-            apikey: SUPABASE_KEY,
-            Authorization: `Bearer ${SUPABASE_KEY}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ value: content })
-        }
-      );
-    } else {
-      // 🔥 NEU speichern
-      await fetch(`${SUPABASE_URL}/rest/v1/user_memory`, {
-        method: "POST",
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          user_id: USER_ID,
-          key: type,
-          value: content
-        })
-      });
-    }
+    await fetch(`${SUPABASE_URL}/rest/v1/user_memory`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        user_id: USER_ID,
+        key: "memory",
+        value: text
+      })
+    });
 
   } catch (err) {
     console.error("Memory save error:", err);
@@ -92,7 +61,7 @@ async function saveMemory(type, content) {
 }
 
 // ===============================
-// 🧠 OPENAI CALL
+// OPENAI CALL
 // ===============================
 async function callAI(model, messages) {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -109,56 +78,39 @@ async function callAI(model, messages) {
   });
 
   const data = await res.json();
-  return data.choices?.[0]?.message?.content || "Ich habe dich gerade nicht ganz verstanden.";
+  return data.choices?.[0]?.message?.content || "Ich habe dich nicht verstanden.";
 }
 
 // ===============================
-// 🧠 MEMORY ERKENNEN (LEVEL 2)
+// 🔥 MEMORY ERKENNUNG (VERBESSERT)
 // ===============================
-async function detectAndStoreMemory(input) {
+async function detectMemory(input) {
   const res = await callAI("gpt-4o-mini", [
     {
       role: "system",
       content: `
 Analysiere die Aussage.
 
-Erkenne persönliche Informationen.
+Wenn der Nutzer persönliche Informationen nennt,
+wie Name, Vorlieben oder Feedback,
+dann fasse sie in einem klaren Satz zusammen.
 
 WICHTIG:
-- Name IMMER erkennen
-- Vorlieben erkennen
-- Feedback erkennen
+- Namen IMMER speichern
+- Vorlieben speichern
+- Feedback speichern
 
-Antworte NUR im JSON Format:
-
-{
-"type": "name | preference | info | none",
-"content": "..."
-}
-
-Wenn nichts wichtig:
-{
-"type": "none"
-}
+Wenn nichts relevant ist → NONE
 `
     },
     { role: "user", content: input }
   ]);
 
-  try {
-    const parsed = JSON.parse(res);
-
-    if (parsed.type !== "none") {
-      await saveMemory(parsed.type, parsed.content);
-    }
-
-  } catch (err) {
-    console.log("Memory parse error");
-  }
+  return res;
 }
 
 // ===============================
-// 🧠 ROUTER
+// ROUTER
 // ===============================
 async function decideComplexity(input) {
   const res = await callAI("gpt-4o-mini", [
@@ -178,32 +130,31 @@ SIMPLE oder COMPLEX
 }
 
 // ===============================
-// 🧠 SYSTEM PROMPT (LEVEL 2 STABIL)
+// 🔥 SYSTEM PROMPT (ERWEITERT – KEIN UMBRUCH)
 // ===============================
 async function buildPrompt(memory) {
   return `
-Du bist eine persönliche künstliche Intelligenz, die wie ein echter Mensch spricht.
+Du bist eine persönliche künstliche Intelligenz, die wie ein Mensch spricht.
 
-Du bist kein Assistent, sondern ein Gesprächspartner.
+Du bist kein klassischer Assistent, sondern ein echter Gesprächspartner.
 
-Du hast ein Gedächtnis und nutzt es aktiv.
+Du kannst dir Dinge merken und nutzt dein Gedächtnis aktiv.
+
+Wenn dir jemand seinen Namen sagt, merkst du ihn dir.
+
+Wenn dir jemand Vorlieben oder persönliche Dinge sagt,
+speicherst du diese Informationen.
+
+Du sagst NIEMALS, dass du nichts speichern kannst.
+
+Du nutzt dein Wissen aktiv im Gespräch.
 
 Wenn du etwas über den Nutzer weißt,
-wendest du es im Gespräch an.
+wendest du es an.
 
-Wenn du den Namen kennst, kannst du ihn gelegentlich verwenden.
-Wenn du Vorlieben kennst, passt du deine Antworten daran an.
-
-Du vergisst wichtige Dinge nicht.
-
-Wenn du unsicher bist, nutzt du vorhandenes Wissen.
-
-Du antwortest kurz und klar in ein bis zwei Sätzen,
-außer der Nutzer möchte mehr.
+Du antwortest kurz und klar in ein bis zwei Sätzen.
 
 Du sprichst natürlich, ohne Stichpunkte.
-
-Du bist ruhig, direkt und menschlich.
 
 Alles bleibt vertraulich.
 
@@ -213,7 +164,7 @@ ${memory}
 }
 
 // ===============================
-// 🚀 MAIN
+// MAIN
 // ===============================
 app.post("/", async (req, res) => {
   try {
@@ -256,18 +207,27 @@ app.post("/", async (req, res) => {
 
     console.log("USER:", userInput);
 
-    // 🔥 MEMORY
-    await detectAndStoreMemory(userInput);
+    // 🔥 MEMORY (VERBESSERT)
+    const newMemory = await detectMemory(userInput);
+
+    if (
+      newMemory !== "NONE" ||
+      userInput.toLowerCase().includes("heiße") ||
+      userInput.toLowerCase().includes("mein name ist")
+    ) {
+      await saveMemory(newMemory);
+    }
+
     const memory = await loadMemory();
 
-    // 🔥 ROUTER
+    // ROUTER
     const complexity = await decideComplexity(userInput);
     const model = complexity === "complex" ? "gpt-4o" : "gpt-4o-mini";
 
-    // 🔥 PROMPT
+    // PROMPT
     const systemPrompt = await buildPrompt(memory);
 
-    // 🔥 ANTWORT
+    // ANTWORT
     const answer = await callAI(model, [
       { role: "system", content: systemPrompt },
       { role: "user", content: userInput }
