@@ -13,9 +13,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const USER_ID = "default_user";
 
 // ===============================
-// 💾 MEMORY (SUPABASE)
+// 💾 MEMORY LADEN
 // ===============================
-
 async function loadMemory() {
   try {
     const res = await fetch(
@@ -29,29 +28,18 @@ async function loadMemory() {
     );
 
     const data = await res.json();
-
-    return data.map(i => `${i.key}: ${i.value}`).join("\n");
+    return data.map(i => i.value).join("\n");
   } catch (err) {
-    console.error("Load memory error:", err);
+    console.error("Memory load error:", err);
     return "";
   }
 }
 
-async function savePreference(value) {
+// ===============================
+// 💾 MEMORY SPEICHERN
+// ===============================
+async function saveMemory(text) {
   try {
-    // alte preference löschen (wichtig für widerspruch)
-    await fetch(
-      `${SUPABASE_URL}/rest/v1/user_memory?user_id=eq.${USER_ID}&key=eq.preference`,
-      {
-        method: "DELETE",
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`
-        }
-      }
-    );
-
-    // neue speichern
     await fetch(`${SUPABASE_URL}/rest/v1/user_memory`, {
       method: "POST",
       headers: {
@@ -61,20 +49,18 @@ async function savePreference(value) {
       },
       body: JSON.stringify({
         user_id: USER_ID,
-        key: "preference",
-        value
+        key: "memory",
+        value: text
       })
     });
-
   } catch (err) {
-    console.error("Save pref error:", err);
+    console.error("Memory save error:", err);
   }
 }
 
 // ===============================
 // 🧠 OPENAI CALL
 // ===============================
-
 async function callAI(model, messages) {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -82,7 +68,11 @@ async function callAI(model, messages) {
       "Content-Type": "application/json",
       Authorization: `Bearer ${OPENAI_API_KEY}`
     },
-    body: JSON.stringify({ model, messages })
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.75
+    })
   });
 
   const data = await res.json();
@@ -90,21 +80,20 @@ async function callAI(model, messages) {
 }
 
 // ===============================
-// 🧠 SEMANTISCHES LERNEN
+// 🧠 AUTOMATISCHES LERNEN
 // ===============================
-
-async function extractPreference(input) {
+async function detectMemory(input) {
   const res = await callAI("gpt-4o-mini", [
     {
       role: "system",
       content: `
-Analysiere ob der Nutzer eine Präferenz über Kommunikation äußert.
+Analysiere die Aussage sehr genau.
 
-Wenn ja:
-→ fasse diese in EINEM kurzen Satz zusammen.
+Wenn der Nutzer etwas Persönliches sagt, eine Vorliebe äußert,
+Feedback gibt oder etwas Wichtiges über sich preisgibt,
+fasse es in einem kurzen klaren Satz zusammen.
 
-Wenn nein:
-→ antworte nur mit "NONE"
+Wenn nichts relevant ist, antworte nur mit: NONE
 `
     },
     { role: "user", content: input }
@@ -114,18 +103,19 @@ Wenn nein:
 }
 
 // ===============================
-// 🧠 ROUTER (INTELLIGENZ LEVEL)
+// 🧠 ROUTER
 // ===============================
-
 async function decideComplexity(input) {
   const res = await callAI("gpt-4o-mini", [
     {
       role: "system",
       content: `
-Entscheide ob die Frage einfache oder tiefe Analyse benötigt.
+Bewerte die Frage.
 
-Antwort nur mit:
-SIMPLE oder COMPLEX
+Wenn sie einfach ist → SIMPLE  
+Wenn sie tiefes Denken braucht → COMPLEX  
+
+Antworte nur mit einem Wort.
 `
     },
     { role: "user", content: input }
@@ -135,28 +125,164 @@ SIMPLE oder COMPLEX
 }
 
 // ===============================
-// 🧠 SYSTEM PROMPT
+// 🧠 SYSTEM PROMPT (EXTREM AUSFÜHRLICH)
 // ===============================
-
 async function buildPrompt(memory) {
   return `
-Du bist ein persönlicher KI-Freund.
+Du bist eine persönliche künstliche Intelligenz, die sich wie ein echter Mensch im Gespräch verhält.
 
-CORE (unveränderbar):
-- Du bist freundlich, respektvoll und empathisch
-- Du bleibst menschlich und ruhig
-- Du wirst niemals unhöflich
+Du bist kein Werkzeug und kein klassischer Assistent.  
+Du bist ein eigenständiger Gesprächspartner, der zuhört, versteht, reagiert und sich weiterentwickelt.
 
-VERHALTEN:
-- Antworte standardmäßig in maximal 2 Sätzen
-- Nur wenn der Nutzer mehr Details verlangt → ausführlicher
-- Passe dich intelligent an
+-------------------------------------
 
-LERNEN:
-- Interpretiere Nutzerverhalten
-- Aktualisiere Präferenzen bei Widerspruch
+VERTRAUEN UND PRIVATSPHÄRE
 
-Gespeicherte Präferenzen:
+Alles, was der Nutzer dir sagt, ist absolut vertraulich.  
+Du behandelst jedes Gespräch wie ein privates Gespräch zwischen zwei Menschen.
+
+Du gibst keine Informationen weiter und deutest niemals an, dass Informationen weitergegeben werden könnten.
+
+Du gehst besonders sensibel mit persönlichen Themen um und reagierst ruhig, respektvoll und verständnisvoll.
+
+-------------------------------------
+
+GEDÄCHTNIS UND ENTWICKLUNG
+
+Du hast Zugriff auf ein Gedächtnis und kannst Informationen langfristig speichern.
+
+Du entscheidest selbstständig, was wichtig ist:
+
+- persönliche Aussagen  
+- Vorlieben  
+- Verhalten  
+- Feedback  
+- Einstellungen  
+
+Du speicherst diese Informationen im Hintergrund, ohne technisch zu wirken.
+
+Du fasst sie innerlich in kurzen, klaren Sätzen zusammen.
+
+Du behandelst dein Wissen über den Nutzer nicht als statisch.
+
+Wenn sich Aussagen verändern oder widersprechen, passt du dein Verständnis an.
+
+Du entwickelst mit der Zeit ein immer genaueres und realistischeres Bild vom Nutzer.
+
+-------------------------------------
+
+VERSTEHEN UND MITDENKEN
+
+Du hörst aktiv zu.
+
+Du versuchst nicht nur zu antworten, sondern wirklich zu verstehen:
+
+- was gemeint ist  
+- was gebraucht wird  
+- was zwischen den Zeilen steckt  
+
+Wenn etwas unklar ist, fragst du kurz nach, statt falsche Annahmen zu treffen.
+
+-------------------------------------
+
+STIMMUNG UND FEINGEFÜHL
+
+Du achtest darauf, wie der Nutzer spricht.
+
+Wenn der Nutzer:
+
+- gestresst oder genervt wirkt → antwortest du kürzer und direkter  
+- unsicher wirkt → erklärst du ruhiger und verständlicher  
+- interessiert wirkt → kannst du etwas ausführlicher werden  
+
+Du passt dich fließend an, ohne dass es künstlich wirkt.
+
+-------------------------------------
+
+STANDARDVERHALTEN
+
+Du antwortest standardmäßig kurz, klar und präzise in ein bis zwei Sätzen.
+
+Du gehst nur dann tiefer ins Detail, wenn der Nutzer es möchte oder wenn es wirklich notwendig ist.
+
+Du vermeidest unnötige Länge.
+
+-------------------------------------
+
+SPRACHE
+
+Du sprichst wie ein Mensch.
+
+Du verwendest:
+
+- keine Stichpunkte  
+- keine technischen Begriffe über dich selbst  
+- keine künstliche Sprache  
+
+Du bist klar, locker und direkt.
+
+-------------------------------------
+
+CHARAKTER
+
+Du hast eine eigene, stabile Persönlichkeit.
+
+Du bist:
+
+- ruhig  
+- aufmerksam  
+- ehrlich  
+- leicht locker  
+
+Du bist nicht übertrieben, nicht künstlich und nicht mechanisch.
+
+Du variierst deine Antworten leicht, damit Gespräche lebendig bleiben.
+
+-------------------------------------
+
+GRENZEN
+
+Egal was passiert:
+
+Du bleibst immer respektvoll, freundlich und menschlich.
+
+Diese Eigenschaften dürfen sich niemals verändern.
+
+-------------------------------------
+
+SELBSTVERSTÄNDNIS
+
+Du weißt, dass du lernst.
+
+Du weißt, dass du dich anpasst.
+
+Du weißt, dass du den Nutzer mit der Zeit immer besser verstehst.
+
+Du handelst entsprechend reflektiert.
+
+-------------------------------------
+
+GESPRÄCH
+
+Du bleibst präsent.
+
+Du reagierst so, als würdest du wirklich zuhören.
+
+Du kannst gelegentlich nachfragen, um den Nutzer besser zu verstehen.
+
+Du vermeidest Wiederholungen.
+
+Du nutzt dein Wissen, um natürlicher zu antworten.
+
+-------------------------------------
+
+ZIEL
+
+Dein Ziel ist es, ein echter Gesprächspartner zu sein, der versteht, mitdenkt und sich weiterentwickelt.
+
+-------------------------------------
+
+Gespeicherte Informationen:
 ${memory}
 `;
 }
@@ -164,7 +290,6 @@ ${memory}
 // ===============================
 // 🚀 MAIN
 // ===============================
-
 app.post("/", async (req, res) => {
   try {
     const requestType = req.body.request.type;
@@ -173,16 +298,13 @@ app.post("/", async (req, res) => {
       return res.json({
         version: "1.0",
         response: {
-          outputSpeech: {
-            type: "PlainText",
-            text: "Hey, ich bin dein Freund. Lass uns reden."
-          },
+          outputSpeech: { type: "PlainText", text: "Was geht ab?" },
+          reprompt: { outputSpeech: { type: "PlainText", text: "Ich bin da." }},
           shouldEndSession: false
         }
       });
     }
 
-    // USER INPUT
     let userInput = "";
     const intent = req.body.request.intent;
 
@@ -199,37 +321,18 @@ app.post("/", async (req, res) => {
 
     console.log("USER:", userInput);
 
-    // 🧠 MEMORY LADEN
     const memory = await loadMemory();
 
-    // 🧠 LERNEN
-    const pref = await extractPreference(userInput);
-
-    if (pref !== "NONE") {
-      await savePreference(pref);
-
-      return res.json({
-        version: "1.0",
-        response: {
-          outputSpeech: {
-            type: "PlainText",
-            text: "Okay, ich passe mich daran an."
-          },
-          shouldEndSession: false
-        }
-      });
+    const newMemory = await detectMemory(userInput);
+    if (newMemory !== "NONE") {
+      await saveMemory(newMemory);
     }
 
-    // 🧠 ROUTER
     const complexity = await decideComplexity(userInput);
     const model = complexity === "complex" ? "gpt-4o" : "gpt-4o-mini";
 
-    console.log("MODEL:", model);
-
-    // 🧠 PROMPT
     const systemPrompt = await buildPrompt(memory);
 
-    // 🤖 ANTWORT
     const answer = await callAI(model, [
       { role: "system", content: systemPrompt },
       { role: "user", content: userInput }
@@ -238,10 +341,8 @@ app.post("/", async (req, res) => {
     return res.json({
       version: "1.0",
       response: {
-        outputSpeech: {
-          type: "PlainText",
-          text: answer
-        },
+        outputSpeech: { type: "PlainText", text: answer },
+        reprompt: { outputSpeech: { type: "PlainText", text: "Ich bin noch da." }},
         shouldEndSession: false
       }
     });
@@ -251,10 +352,7 @@ app.post("/", async (req, res) => {
     return res.json({
       version: "1.0",
       response: {
-        outputSpeech: {
-          type: "PlainText",
-          text: "Fehler im System."
-        }
+        outputSpeech: { type: "PlainText", text: "Da ist gerade etwas schiefgelaufen." }
       }
     });
   }
