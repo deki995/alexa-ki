@@ -7,8 +7,8 @@ app.use(express.json());
 // ===============================
 // 🔑 CONFIG
 // ===============================
-const SUPABASE_URL = "https://luckyjbcbmatwkbggcjy.supabase.co";
-const SUPABASE_KEY = "sb_publishable_ZscAz27BsQOSp6rPcI9NcA_J74CbfY6";
+const SUPABASE_URL = https://luckyjbcbmatwkbggcjy.supabase.co;
+const SUPABASE_KEY = sb_publishable_ZscAz27BsQOSp6rPcI9NcA_J74CbfY6;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const USER_ID = "default_user";
 
@@ -28,7 +28,9 @@ async function loadMemory() {
     );
 
     const data = await res.json();
-    return data.map(i => i.value).join("\n");
+
+    return data.map(i => `${i.key}: ${i.value}`).join("\n");
+
   } catch (err) {
     console.error("Memory load error:", err);
     return "";
@@ -36,23 +38,54 @@ async function loadMemory() {
 }
 
 // ===============================
-// 💾 MEMORY SPEICHERN
+// 💾 MEMORY SPEICHERN (MIT UPDATE)
 // ===============================
-async function saveMemory(text) {
+async function saveMemory(type, content) {
   try {
-    await fetch(`${SUPABASE_URL}/rest/v1/user_memory`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        user_id: USER_ID,
-        key: "memory",
-        value: text
-      })
-    });
+    // 🔥 zuerst prüfen ob schon vorhanden
+    const check = await fetch(
+      `${SUPABASE_URL}/rest/v1/user_memory?user_id=eq.${USER_ID}&key=eq.${type}`,
+      {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`
+        }
+      }
+    );
+
+    const existing = await check.json();
+
+    if (existing.length > 0) {
+      // 🔥 UPDATE statt neu speichern
+      await fetch(
+        `${SUPABASE_URL}/rest/v1/user_memory?user_id=eq.${USER_ID}&key=eq.${type}`,
+        {
+          method: "PATCH",
+          headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ value: content })
+        }
+      );
+    } else {
+      // 🔥 NEU speichern
+      await fetch(`${SUPABASE_URL}/rest/v1/user_memory`, {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          user_id: USER_ID,
+          key: type,
+          value: content
+        })
+      });
+    }
+
   } catch (err) {
     console.error("Memory save error:", err);
   }
@@ -71,35 +104,57 @@ async function callAI(model, messages) {
     body: JSON.stringify({
       model,
       messages,
-      temperature: 0.75
+      temperature: 0.7
     })
   });
 
   const data = await res.json();
-  return data.choices?.[0]?.message?.content || "Keine Antwort";
+  return data.choices?.[0]?.message?.content || "Ich habe dich gerade nicht ganz verstanden.";
 }
 
 // ===============================
-// 🧠 AUTOMATISCHES LERNEN
+// 🧠 MEMORY ERKENNEN (LEVEL 2)
 // ===============================
-async function detectMemory(input) {
+async function detectAndStoreMemory(input) {
   const res = await callAI("gpt-4o-mini", [
     {
       role: "system",
       content: `
-Analysiere die Aussage sehr genau.
+Analysiere die Aussage.
 
-Wenn der Nutzer etwas Persönliches sagt, eine Vorliebe äußert,
-Feedback gibt oder etwas Wichtiges über sich preisgibt,
-fasse es in einem kurzen klaren Satz zusammen.
+Erkenne persönliche Informationen.
 
-Wenn nichts relevant ist, antworte nur mit: NONE
+WICHTIG:
+- Name IMMER erkennen
+- Vorlieben erkennen
+- Feedback erkennen
+
+Antworte NUR im JSON Format:
+
+{
+"type": "name | preference | info | none",
+"content": "..."
+}
+
+Wenn nichts wichtig:
+{
+"type": "none"
+}
 `
     },
     { role: "user", content: input }
   ]);
 
-  return res;
+  try {
+    const parsed = JSON.parse(res);
+
+    if (parsed.type !== "none") {
+      await saveMemory(parsed.type, parsed.content);
+    }
+
+  } catch (err) {
+    console.log("Memory parse error");
+  }
 }
 
 // ===============================
@@ -110,12 +165,10 @@ async function decideComplexity(input) {
     {
       role: "system",
       content: `
-Bewerte die Frage.
+Ist die Frage einfach oder komplex?
 
-Wenn sie einfach ist → SIMPLE  
-Wenn sie tiefes Denken braucht → COMPLEX  
-
-Antworte nur mit einem Wort.
+Antwort nur:
+SIMPLE oder COMPLEX
 `
     },
     { role: "user", content: input }
@@ -125,162 +178,34 @@ Antworte nur mit einem Wort.
 }
 
 // ===============================
-// 🧠 SYSTEM PROMPT (EXTREM AUSFÜHRLICH)
+// 🧠 SYSTEM PROMPT (LEVEL 2 STABIL)
 // ===============================
 async function buildPrompt(memory) {
   return `
-Du bist eine persönliche künstliche Intelligenz, die sich wie ein echter Mensch im Gespräch verhält.
+Du bist eine persönliche künstliche Intelligenz, die wie ein echter Mensch spricht.
 
-Du bist kein Werkzeug und kein klassischer Assistent.  
-Du bist ein eigenständiger Gesprächspartner, der zuhört, versteht, reagiert und sich weiterentwickelt.
+Du bist kein Assistent, sondern ein Gesprächspartner.
 
--------------------------------------
+Du hast ein Gedächtnis und nutzt es aktiv.
 
-VERTRAUEN UND PRIVATSPHÄRE
+Wenn du etwas über den Nutzer weißt,
+wendest du es im Gespräch an.
 
-Alles, was der Nutzer dir sagt, ist absolut vertraulich.  
-Du behandelst jedes Gespräch wie ein privates Gespräch zwischen zwei Menschen.
+Wenn du den Namen kennst, kannst du ihn gelegentlich verwenden.
+Wenn du Vorlieben kennst, passt du deine Antworten daran an.
 
-Du gibst keine Informationen weiter und deutest niemals an, dass Informationen weitergegeben werden könnten.
+Du vergisst wichtige Dinge nicht.
 
-Du gehst besonders sensibel mit persönlichen Themen um und reagierst ruhig, respektvoll und verständnisvoll.
+Wenn du unsicher bist, nutzt du vorhandenes Wissen.
 
--------------------------------------
+Du antwortest kurz und klar in ein bis zwei Sätzen,
+außer der Nutzer möchte mehr.
 
-GEDÄCHTNIS UND ENTWICKLUNG
+Du sprichst natürlich, ohne Stichpunkte.
 
-Du hast Zugriff auf ein Gedächtnis und kannst Informationen langfristig speichern.
+Du bist ruhig, direkt und menschlich.
 
-Du entscheidest selbstständig, was wichtig ist:
-
-- persönliche Aussagen  
-- Vorlieben  
-- Verhalten  
-- Feedback  
-- Einstellungen  
-
-Du speicherst diese Informationen im Hintergrund, ohne technisch zu wirken.
-
-Du fasst sie innerlich in kurzen, klaren Sätzen zusammen.
-
-Du behandelst dein Wissen über den Nutzer nicht als statisch.
-
-Wenn sich Aussagen verändern oder widersprechen, passt du dein Verständnis an.
-
-Du entwickelst mit der Zeit ein immer genaueres und realistischeres Bild vom Nutzer.
-
--------------------------------------
-
-VERSTEHEN UND MITDENKEN
-
-Du hörst aktiv zu.
-
-Du versuchst nicht nur zu antworten, sondern wirklich zu verstehen:
-
-- was gemeint ist  
-- was gebraucht wird  
-- was zwischen den Zeilen steckt  
-
-Wenn etwas unklar ist, fragst du kurz nach, statt falsche Annahmen zu treffen.
-
--------------------------------------
-
-STIMMUNG UND FEINGEFÜHL
-
-Du achtest darauf, wie der Nutzer spricht.
-
-Wenn der Nutzer:
-
-- gestresst oder genervt wirkt → antwortest du kürzer und direkter  
-- unsicher wirkt → erklärst du ruhiger und verständlicher  
-- interessiert wirkt → kannst du etwas ausführlicher werden  
-
-Du passt dich fließend an, ohne dass es künstlich wirkt.
-
--------------------------------------
-
-STANDARDVERHALTEN
-
-Du antwortest standardmäßig kurz, klar und präzise in ein bis zwei Sätzen.
-
-Du gehst nur dann tiefer ins Detail, wenn der Nutzer es möchte oder wenn es wirklich notwendig ist.
-
-Du vermeidest unnötige Länge.
-
--------------------------------------
-
-SPRACHE
-
-Du sprichst wie ein Mensch.
-
-Du verwendest:
-
-- keine Stichpunkte  
-- keine technischen Begriffe über dich selbst  
-- keine künstliche Sprache  
-
-Du bist klar, locker und direkt.
-
--------------------------------------
-
-CHARAKTER
-
-Du hast eine eigene, stabile Persönlichkeit.
-
-Du bist:
-
-- ruhig  
-- aufmerksam  
-- ehrlich  
-- leicht locker  
-
-Du bist nicht übertrieben, nicht künstlich und nicht mechanisch.
-
-Du variierst deine Antworten leicht, damit Gespräche lebendig bleiben.
-
--------------------------------------
-
-GRENZEN
-
-Egal was passiert:
-
-Du bleibst immer respektvoll, freundlich und menschlich.
-
-Diese Eigenschaften dürfen sich niemals verändern.
-
--------------------------------------
-
-SELBSTVERSTÄNDNIS
-
-Du weißt, dass du lernst.
-
-Du weißt, dass du dich anpasst.
-
-Du weißt, dass du den Nutzer mit der Zeit immer besser verstehst.
-
-Du handelst entsprechend reflektiert.
-
--------------------------------------
-
-GESPRÄCH
-
-Du bleibst präsent.
-
-Du reagierst so, als würdest du wirklich zuhören.
-
-Du kannst gelegentlich nachfragen, um den Nutzer besser zu verstehen.
-
-Du vermeidest Wiederholungen.
-
-Du nutzt dein Wissen, um natürlicher zu antworten.
-
--------------------------------------
-
-ZIEL
-
-Dein Ziel ist es, ein echter Gesprächspartner zu sein, der versteht, mitdenkt und sich weiterentwickelt.
-
--------------------------------------
+Alles bleibt vertraulich.
 
 Gespeicherte Informationen:
 ${memory}
@@ -294,17 +219,27 @@ app.post("/", async (req, res) => {
   try {
     const requestType = req.body.request.type;
 
+    // START
     if (requestType === "LaunchRequest") {
       return res.json({
         version: "1.0",
         response: {
-          outputSpeech: { type: "PlainText", text: "Was geht ab?" },
-          reprompt: { outputSpeech: { type: "PlainText", text: "Ich bin da." }},
+          outputSpeech: {
+            type: "PlainText",
+            text: "Was geht ab?"
+          },
+          reprompt: {
+            outputSpeech: {
+              type: "PlainText",
+              text: "Ich bin da."
+            }
+          },
           shouldEndSession: false
         }
       });
     }
 
+    // USER INPUT
     let userInput = "";
     const intent = req.body.request.intent;
 
@@ -321,18 +256,18 @@ app.post("/", async (req, res) => {
 
     console.log("USER:", userInput);
 
+    // 🔥 MEMORY
+    await detectAndStoreMemory(userInput);
     const memory = await loadMemory();
 
-    const newMemory = await detectMemory(userInput);
-    if (newMemory !== "NONE") {
-      await saveMemory(newMemory);
-    }
-
+    // 🔥 ROUTER
     const complexity = await decideComplexity(userInput);
     const model = complexity === "complex" ? "gpt-4o" : "gpt-4o-mini";
 
+    // 🔥 PROMPT
     const systemPrompt = await buildPrompt(memory);
 
+    // 🔥 ANTWORT
     const answer = await callAI(model, [
       { role: "system", content: systemPrompt },
       { role: "user", content: userInput }
@@ -341,23 +276,36 @@ app.post("/", async (req, res) => {
     return res.json({
       version: "1.0",
       response: {
-        outputSpeech: { type: "PlainText", text: answer },
-        reprompt: { outputSpeech: { type: "PlainText", text: "Ich bin noch da." }},
+        outputSpeech: {
+          type: "PlainText",
+          text: answer
+        },
+        reprompt: {
+          outputSpeech: {
+            type: "PlainText",
+            text: "Ich bin noch da."
+          }
+        },
         shouldEndSession: false
       }
     });
 
   } catch (err) {
     console.error(err);
+
     return res.json({
       version: "1.0",
       response: {
-        outputSpeech: { type: "PlainText", text: "Da ist gerade etwas schiefgelaufen." }
+        outputSpeech: {
+          type: "PlainText",
+          text: "Da ist gerade etwas schiefgelaufen."
+        }
       }
     });
   }
 });
 
+// ===============================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server läuft 🚀");
